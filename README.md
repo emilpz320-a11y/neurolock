@@ -23,7 +23,7 @@ The full loop, from origin event to callback (recorded in the demo video and in 
 
 An earlier run on a first deployment froze the same drain 3 s after the request, so expect 1–3 s end to end.
 
-**Demo video (1:41):** VIDEO_URL
+**Demo video (1:41):** https://youtu.be/mSYyXL5dXVA
 
 ## The problem
 Smart-wallet and treasury drains happen in seconds. Time-locks help only if something watches them. Today that watcher is an off-chain bot: a server, an API key, a single point of failure.
