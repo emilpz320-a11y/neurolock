@@ -1,0 +1,16 @@
+{
+  "sentinel": "0xdcaa65afc585d92a43a60b282ec71d03072eb4c3",
+  "sentinelDeployTx": "0x63ec089eb92bbc8a156cc1daecace5fc097a6002f7c53594ad40cbc38ba6673c",
+  "vault": "0x58067ca3023c9cb88418617f6ec458b87e6e128b",
+  "vaultDeployTx": "0xc3bad2293f12a3336803d8d44279fd2e5e9fa1704545fdb41378a9dcc66a22f6",
+  "watchTx": "0x4d21c037aec67e45b578e8bd64d6e3e4a888c549c209fd5c8f127db28ea7cc7a",
+  "callbackDepositTx": "0x08ce76e15a96c53832c26ed6649ab629e96a5d419312029e2afcc0427ab5c2c5",
+  "benignRequestTx": "0xe69dd54b9c167c37a098fc2bf30a822278cfde660d130438a62dcb615fb313e5",
+  "drainRequestTx": "0x2025af291c4a983c5977a19bbec26a487f9d1c71f8fc70280eca9977b256c103",
+  "freezeCallbackTx": "0x215c6611785bd86f7e742ada6dbb23e6e5be458539eb85a8b7c8d5fdbf2ea89d",
+  "freezeLatencySeconds": "1",
+  "benignExecuteTx": "0x90d1d2afb57818c9978b8bb369308e899120b26534ad7560d594a330a500e2cf",
+  "drainExecuteBlocked": "execute(1) reverts with NotPending: the frozen withdrawal cannot settle",
+  "benignReactTx": "0x421e9d72b60a819f185f57b478d1b1f4cea61498f2373d517fb171dfb489358e",
+  "drainReactTx": "0x95e55edadc77063100e54757caabc5f995408208568b670332c942a0e85aba93"
+}

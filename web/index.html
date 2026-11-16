@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeuroLock — live monitor</title>
+<style>
+  :root { --bg:#0b0f17; --panel:#131a26; --line:#243044; --ink:#e8eef7; --dim:#8a99b0; --ok:#3ddc97; --bad:#ff5d73; --warn:#ffc857; --accent:#6ea8ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, "Segoe UI", sans-serif; }
+  header { padding:22px 28px 10px; display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:26px; letter-spacing:.3px; }
+  h1 span { color:var(--accent); }
+  header p { margin:0; color:var(--dim); }
+  main { padding:8px 28px 28px; display:grid; gap:16px; grid-template-columns: 1fr; max-width:1240px; }
+  .flow { display:grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap:10px; align-items:stretch; }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .box h2 { margin:0 0 4px; font-size:13px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim); font-weight:600; }
+  .box b { font-size:17px; }
+  .box small { display:block; color:var(--dim); margin-top:4px; overflow-wrap:anywhere; }
+  .arrow { align-self:center; color:var(--dim); font-size:13px; text-align:center; min-width:120px; }
+  .arrow i { display:block; font-style:normal; font-size:24px; color:var(--accent); }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:1px; font-weight:600; }
+  .pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.6px; }
+  .pill.ok { background:#123a2b; color:var(--ok); } .pill.bad { background:#451923; color:var(--bad); } .pill.wait { background:#40351a; color:var(--warn); } .pill.off { background:#222b3a; color:var(--dim); }
+  .feat { display:grid; grid-template-columns: 96px 1fr 44px; gap:8px; align-items:center; font-size:13px; color:var(--dim); margin:3px 0; }
+  .bar { height:8px; background:#1d2636; border-radius:4px; overflow:hidden; } .bar i { display:block; height:100%; background:var(--accent); }
+  .score { font:600 20px ui-monospace, Consolas, monospace; }
+  .score.bad { color:var(--bad); } .score.ok { color:var(--ok); }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size:13px; }
+  #status { color:var(--dim); font-size:13px; }
+  .empty { color:var(--dim); padding:18px 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Neuro<span>Lock</span></h1>
+  <p>An on-chain neural network that freezes suspicious vault withdrawals before they settle. No keeper, no oracle, no off-chain AI.</p>
+</header>
+<main>
+  <section class="flow">
+    <div class="box"><h2>Base Sepolia</h2><b>SentinelVault</b><small id="vaultAddr">…</small><small id="vaultBal"></small></div>
+    <div class="arrow"><i>→</i>WithdrawalRequested</div>
+    <div class="box"><h2>Reactive Network (Lasna)</h2><b>SentinelReactive + MLP 4→8→1</b><small id="sentinelAddr">…</small><small>features → on-chain inference → decision</small></div>
+    <div class="arrow"><i>→</i>freeze() callback</div>
+    <div class="box"><h2>Base Sepolia</h2><b>Withdrawal frozen</b><small>inside the time-lock window (<span id="delay">30</span> s)</small></div>
+  </section>
+
+  <section class="box">
+    <h2>Withdrawal requests (read live from both chains)</h2>
+    <table>
+      <thead><tr><th>#</th><th>Recipient</th><th>Amount</th><th>Neural score</th><th>Features seen by the network</th><th>Outcome</th><th>Transactions</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+  <div id="status"></div>
+</main>
+<script type="module">
+const BASE_RPC = 'https://sepolia.base.org';
+const LASNA_RPC = 'https://lasna-rpc.rnk.dev/';
+const BASE_SCAN = 'https://sepolia.basescan.org';
+const REACT_SCAN = 'https://lasna.reactscan.net';
+const TOPIC = {
+  requested: '0x8774dcd6f347788be32bacb440fd662ba943bc006ab5f33a8c8517241e477ec5',
+  executed: '0xd6cddb3d69146e96ebc2c87b1b3dd0b20ee2d3b0eadf134e011afb434a3e56e6',
+  frozen: '0xe9e74ea37bedb2e5d3e0fe9e048d03bdc0b45ffad94e69d410f031f2c6ce7e86',
+  cancelled: '0xe8de1e631ea541ac8e6cb398aafb71b991eb58d489298f7bc93ba7e17fa2042b',
+  scored: '0x174eed664f61a6f68222de4212c60bae1a2f217fadd6929a3b1b68be463455f7',
+};
+const FEATURES = ['amount ratio', 'new recipient', 'recency', 'velocity'];
+const $ = (id) => document.getElementById(id);
+
+let rpcId = 0;
+async function rpc(url, method, params) {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }) });
+  const body = await res.json();
+  if (body.error) throw new Error(`${method}: ${body.error.message}`);
+  return body.result;
+}
+const word = (data, i) => '0x' + data.slice(2 + 64 * i, 2 + 64 * (i + 1));
+const toSigned = (hex) => BigInt.asIntN(256, BigInt(hex));
+const eth = (wei) => (Number(wei) / 1e18).toLocaleString('en-US', { maximumFractionDigits: 6 });
+const short = (a) => a.slice(0, 8) + '…' + a.slice(-6);
+const txLink = (scan, hash, label) => `<a href="${scan}/tx/${hash}" target="_blank" rel="noopener">${label}</a>`;
+
+const SEL = { nextId: '0x61b8ce8c', requests: '0x81d12c58' };
+const TX_HASH = /^0x[0-9a-f]{64}$/i;
+const receipts = new Map(); // Base Sepolia receipts of the transactions listed in deployments.json
+
+// Public Base Sepolia RPCs cap eth_getLogs at 200 blocks, so vault state is read with eth_call and the
+// transaction of each step comes from the receipts of the hashes the demo script recorded.
+async function vaultRequests(vault) {
+  const count = Number(BigInt(await rpc(BASE_RPC, 'eth_call', [{ to: vault, data: SEL.nextId }, 'latest'])));
+  const calls = Array.from({ length: count }, (_, id) =>
+    rpc(BASE_RPC, 'eth_call', [{ to: vault, data: SEL.requests + id.toString(16).padStart(64, '0') }, 'latest']).then((data) => ({
+      id,
+      to: '0x' + word(data, 0).slice(26),
+      amount: BigInt(word(data, 1)),
+      executeAfter: Number(BigInt(word(data, 2))),
+      executed: BigInt(word(data, 3)) === 1n,
+      frozen: BigInt(word(data, 4)) === 1n,
+      cancelled: BigInt(word(data, 5)) === 1n,
+    })));
+  return new Map((await Promise.all(calls)).map((r) => [r.id, r]));
+}
+
+async function attachTransactions(dep, requests) {
+  const hashes = Object.values(dep).filter((v) => TX_HASH.test(v) && !receipts.has(v));
+  await Promise.all(hashes.map(async (hash) => {
+    const receipt = await rpc(BASE_RPC, 'eth_getTransactionReceipt', [hash]).catch(() => null);
+    if (!receipt) return; // a Lasna transaction, or not mined yet
+    const block = await rpc(BASE_RPC, 'eth_getBlockByHash', [receipt.blockHash, false]);
+    receipt.timestamp = Number(BigInt(block.timestamp));
+    receipts.set(hash, receipt);
+  }));
+  for (const receipt of receipts.values()) {
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== dep.vault.toLowerCase() || !log.topics[1]) continue;
+      const r = requests.get(Number(BigInt(log.topics[1])));
+      if (!r) continue;
+      if (log.topics[0] === TOPIC.requested) { r.requestTx = log.transactionHash; r.requestedAt = receipt.timestamp; }
+      if (log.topics[0] === TOPIC.frozen) { r.frozenTx = log.transactionHash; r.frozenAt = receipt.timestamp; r.frozenScore = toSigned(word(log.data, 0)); }
+      if (log.topics[0] === TOPIC.executed) r.executedTx = log.transactionHash;
+    }
+  }
+}
+
+async function sentinelLogs(dep) {
+  const receipt = await rpc(LASNA_RPC, 'eth_getTransactionReceipt', [dep.sentinelDeployTx]);
+  return rpc(LASNA_RPC, 'eth_getLogs', [{ address: dep.sentinel, fromBlock: receipt.blockNumber, toBlock: 'latest' }]);
+}
+
+async function refresh() {
+  const dep = await (await fetch('../deployments.json', { cache: 'no-store' })).json();
+  const [requests, scoredLogs, balance, head] = await Promise.all([
+    vaultRequests(dep.vault),
+    sentinelLogs(dep).catch(() => []),
+    rpc(BASE_RPC, 'eth_getBalance', [dep.vault, 'latest']),
+    rpc(BASE_RPC, 'eth_getBlockByNumber', ['latest', false]),
+  ]);
+  await attachTransactions(dep, requests);
+  $('vaultBal').textContent = `balance ${eth(BigInt(balance))} ETH`;
+  const now = Number(BigInt(head.timestamp));
+  for (const log of scoredLogs) {
+    if (log.topics[0] !== TOPIC.scored) continue;
+    const r = requests.get(Number(BigInt(log.topics[3])));
+    if (!r) continue;
+    r.features = [0, 1, 2, 3].map((i) => Number(toSigned(word(log.data, i))) / 1e4);
+    r.score = toSigned(word(log.data, 4));
+    r.scoreTx = log.transactionHash;
+  }
+  const rows = [...requests.values()].sort((a, b) => a.id - b.id).map((r) => {
+    const score = r.score ?? r.frozenScore;
+    const scoreHtml = score === undefined ? `<span class="pill off">${r.executed ? 'passed' : 'scoring…'}</span>`
+      : `<span class="score ${score > 0n ? 'bad' : 'ok'}">${score > 0n ? '+' : ''}${(Number(score) / 1e8).toFixed(2)}</span><br><small class="mono">logit · ${score > 0n ? 'anomalous' : 'benign'}</small>`;
+    const feats = r.features ? r.features.map((v, i) => `<div class="feat"><span>${FEATURES[i]}</span><span class="bar"><i style="width:${Math.round(v * 100)}%"></i></span><span>${v.toFixed(2)}</span></div>`).join('') : '<small class="mono">waiting for the Scored event</small>';
+    const left = r.executeAfter - now;
+    const outcome = r.frozen ? '<span class="pill bad">FROZEN</span>' : r.executed ? '<span class="pill ok">EXECUTED</span>' : r.cancelled ? '<span class="pill off">CANCELLED</span>'
+      : left > 0 ? `<span class="pill wait">TIME-LOCK ${left}s</span>` : '<span class="pill wait">READY</span>';
+    const latency = r.frozenAt && r.requestedAt ? `<br><small class="mono">${r.frozenAt - r.requestedAt} s after the request</small>` : '';
+    const txs = [r.requestTx && txLink(BASE_SCAN, r.requestTx, 'request'), r.scoreTx && txLink(REACT_SCAN, r.scoreTx, 'react()'), r.frozenTx && txLink(BASE_SCAN, r.frozenTx, 'freeze callback'), r.executedTx && txLink(BASE_SCAN, r.executedTx, 'execute')].filter(Boolean).join(' · ');
+    return `<tr><td>${r.id}</td><td class="mono">${short(r.to)}</td><td>${eth(r.amount)} ETH</td><td>${scoreHtml}</td><td>${feats}</td><td>${outcome}${latency}</td><td>${txs}</td></tr>`;
+  });
+  $('rows').innerHTML = rows.join('') || '<tr><td colspan="7" class="empty">No withdrawal requests yet.</td></tr>';
+  $('status').textContent = `Base Sepolia block ${Number(BigInt(head.number))} · refreshed ${new Date().toLocaleTimeString()}`;
+}
+
+async function main() {
+  const dep = await (await fetch('../deployments.json', { cache: 'no-store' })).json();
+  $('vaultAddr').innerHTML = `<a class="mono" href="${BASE_SCAN}/address/${dep.vault}" target="_blank" rel="noopener">${dep.vault}</a>`;
+  $('sentinelAddr').innerHTML = `<a class="mono" href="${REACT_SCAN}/address/${dep.sentinel}" target="_blank" rel="noopener">${dep.sentinel}</a>`;
+  const tick = () => refresh().catch((err) => { $('status').textContent = `RPC error: ${err.message}`; });
+  await tick();
+  setInterval(tick, 2500);
+}
+main().catch((err) => { $('rows').innerHTML = `<tr><td colspan="7" class="empty">Could not load deployments.json: ${err.message}</td></tr>`; });
+</script>
+</body>
+</html>
